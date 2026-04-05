@@ -7,7 +7,9 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build:web": "expo export --platform web"
+    "build:web": "expo export --platform web",
+    "build:ios:testflight": "eas build --platform ios --profile production",
+    "submit:ios:testflight": "eas submit --platform ios --latest"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",

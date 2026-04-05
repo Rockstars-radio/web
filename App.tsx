@@ -1,7 +1,9 @@
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
-import { createElement, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
+  AppState,
   Animated,
   Easing,
   Image,
@@ -17,6 +19,7 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  type AppStateStatus,
 } from 'react-native';
 
 const STREAMS = {
@@ -35,6 +38,7 @@ const STREAMS = {
 const NOW_PLAYING_ENDPOINT = 'https://radio.rockstars.com.co/api/nowplaying/rockstars';
 const API_ORIGIN = 'https://radio.rockstars.com.co';
 const REQUESTS_PER_PAGE = 6;
+const REQUESTS_REFRESH_INTERVAL_MS = 45000;
 const SIGNAL_COPY = 'SEÑAL DE ALTO VOLTAJE';
 const DEFAULT_COVER = require('./assets/rockstars-logo-white.png');
 const STAGE_BACKGROUND = require('./assets/rock-wall-stage.png');
@@ -106,6 +110,20 @@ function formatSongClock(seconds: number) {
   return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
+function getDayMomentLabel() {
+  const hour = new Date().getHours();
+
+  if (hour >= 5 && hour < 12) {
+    return 'mañana';
+  }
+
+  if (hour >= 12 && hour < 19) {
+    return 'tarde';
+  }
+
+  return 'noche';
+}
+
 function buildNowPlaying(payload: any): NowPlayingInfo {
   const song = payload?.now_playing?.song ?? {};
   const live = payload?.live?.is_live ?? false;
@@ -157,6 +175,36 @@ function toAbsoluteUrl(url: string) {
   }
 
   return `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`;
+}
+
+function withFreshQuery(url: string) {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}rt=${Date.now()}`;
+}
+
+function buildRequestSong(entry: any): RequestSong {
+  return {
+    requestId: String(entry?.request_id ?? entry?.song?.id ?? Math.random()),
+    requestUrl: toAbsoluteUrl(entry?.request_url ?? ''),
+    title: entry?.song?.title || 'Canción disponible',
+    artist: entry?.song?.artist || 'Rockstars',
+    album: entry?.song?.album || '',
+    text: entry?.song?.text || 'Rock sin pausas',
+    coverArt: entry?.song?.art || entry?.song?.art_100 || null,
+  };
+}
+
+function shuffleItems<T>(items: T[]) {
+  const nextItems = [...items];
+
+  for (let index = nextItems.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const currentItem = nextItems[index];
+    nextItems[index] = nextItems[swapIndex];
+    nextItems[swapIndex] = currentItem;
+  }
+
+  return nextItems;
 }
 
 function isActiveWebSpinner(
@@ -219,11 +267,22 @@ export default function App() {
   const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(null);
 
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
+  const appStateRef = useRef<AppStateStatus>(IS_WEB ? 'active' : AppState.currentState);
+  const resumeAfterInterruptionRef = useRef(false);
   const spinnerRotation = useRef(new Animated.Value(0)).current;
   const activeStream = STREAMS[selectedStream];
-  const player = useAudioPlayer(activeStream.url);
+  const player = useAudioPlayer(activeStream.url, {
+    keepAudioSessionActive: true,
+  });
   const nativeStatus = useAudioPlayerStatus(player);
   const isWideLayout = width >= 760;
+  const isPhoneLayout = width < 620;
+  const isCompactLayout = width < 430;
+  const isExpoGo =
+    !IS_WEB &&
+    Constants.executionEnvironment === 'storeClient' &&
+    Constants.expoVersion != null;
+  const canUseNativeLockScreen = !IS_WEB && !isExpoGo;
 
   const safeNativePlay = () => {
     try {
@@ -334,62 +393,74 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (activeConsoleTab !== 'requests' || !nowPlaying.requestListUrl || requestSongs.length > 0) {
-      return;
+    if (!nowPlaying.requestListUrl) {
+      setRequestSongs([]);
+      setRequestLoading(false);
+      setRequestError(null);
     }
+  }, [nowPlaying.requestListUrl]);
 
-    const requestListUrl = nowPlaying.requestListUrl;
-    let cancelled = false;
+  const loadRequestSongs = useCallback(
+    async ({ silent = false, clearFeedback = false }: { silent?: boolean; clearFeedback?: boolean } = {}) => {
+      if (!nowPlaying.requestListUrl) {
+        return;
+      }
 
-    const loadRequestSongs = async () => {
-      setRequestLoading(true);
+      if (!silent) {
+        setRequestLoading(true);
+      }
+
       setRequestError(null);
 
+      if (clearFeedback) {
+        setRequestFeedback(null);
+      }
+
       try {
-        const response = await fetch(requestListUrl);
+        const response = await fetch(withFreshQuery(nowPlaying.requestListUrl), {
+          headers: {
+            Accept: 'application/json',
+            'Cache-Control': 'no-cache',
+          },
+        });
 
         if (!response.ok) {
           throw new Error(`Request list unavailable: ${response.status}`);
         }
 
         const payload = await response.json();
-
-        if (cancelled) {
-          return;
-        }
-
         const nextSongs = Array.isArray(payload)
-          ? payload.map((entry: any) => ({
-              requestId: String(entry?.request_id ?? entry?.song?.id ?? Math.random()),
-              requestUrl: toAbsoluteUrl(entry?.request_url ?? ''),
-              title: entry?.song?.title || 'Canción disponible',
-              artist: entry?.song?.artist || 'Rockstars',
-              album: entry?.song?.album || '',
-              text: entry?.song?.text || 'Rock sin pausas',
-              coverArt: entry?.song?.art || entry?.song?.art_100 || null,
-            }))
+          ? shuffleItems(payload.map((entry: any) => buildRequestSong(entry)))
           : [];
 
         setRequestSongs(nextSongs);
       } catch {
-        if (cancelled) {
-          return;
+        if (!silent) {
+          setRequestError('No pudimos cargar el catálogo de pedidos.');
         }
-
-        setRequestError('No pudimos cargar el catálogo de pedidos.');
       } finally {
-        if (!cancelled) {
+        if (!silent) {
           setRequestLoading(false);
         }
       }
-    };
+    },
+    [nowPlaying.requestListUrl],
+  );
 
-    void loadRequestSongs();
+  useEffect(() => {
+    if (activeConsoleTab !== 'requests' || !nowPlaying.requestListUrl) {
+      return;
+    }
+
+    void loadRequestSongs({ silent: requestSongs.length > 0 });
+    const refreshTimer = setInterval(() => {
+      void loadRequestSongs({ silent: true });
+    }, REQUESTS_REFRESH_INTERVAL_MS);
 
     return () => {
-      cancelled = true;
+      clearInterval(refreshTimer);
     };
-  }, [activeConsoleTab, nowPlaying.requestListUrl, requestSongs.length]);
+  }, [activeConsoleTab, loadRequestSongs, nowPlaying.requestListUrl]);
 
   useEffect(() => {
     setRequestPage(1);
@@ -488,6 +559,14 @@ export default function App() {
   }, [shouldKeepPlaying, webAudioUnlocked, webPlaybackState]);
 
   useEffect(() => {
+    if (IS_WEB) {
+      return;
+    }
+
+    player.volume = webVolume;
+  }, [player, webVolume]);
+
+  useEffect(() => {
     if (!(IS_WEB ? isActiveWebSpinner(webPlaybackState, shouldKeepPlaying, webAudioUnlocked) : Boolean(nativeStatus?.isBuffering))) {
       spinnerRotation.stopAnimation();
       spinnerRotation.setValue(0);
@@ -525,6 +604,10 @@ export default function App() {
       return;
     }
 
+    if (resumeAfterInterruptionRef.current) {
+      return;
+    }
+
     const recoveryTimer = setTimeout(() => {
       safeNativePlay();
     }, 1800);
@@ -533,6 +616,98 @@ export default function App() {
       clearTimeout(recoveryTimer);
     };
   }, [nativeStatus?.isBuffering, nativeStatus?.playing, player, selectedStream, shouldKeepPlaying]);
+
+  useEffect(() => {
+    if (IS_WEB) {
+      return;
+    }
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextAppState;
+
+      if (previousState === 'active' && nextAppState !== 'active' && shouldKeepPlaying) {
+        resumeAfterInterruptionRef.current = true;
+        return;
+      }
+
+      if (nextAppState === 'active' && resumeAfterInterruptionRef.current && shouldKeepPlaying) {
+        resumeAfterInterruptionRef.current = false;
+
+        setTimeout(() => {
+          safeNativePlay();
+        }, 900);
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [shouldKeepPlaying]);
+
+  useEffect(() => {
+    if (!canUseNativeLockScreen) {
+      return;
+    }
+
+    if (!shouldKeepPlaying || !nativeStatus?.playing) {
+      player.setActiveForLockScreen(false);
+      return;
+    }
+
+    player.setActiveForLockScreen(
+      true,
+      {
+        title: nowPlaying.songTitle,
+        artist: nowPlaying.songArtist,
+        albumTitle: nowPlaying.stationName,
+        artworkUrl: nowPlaying.coverArt || undefined,
+      },
+      {
+        showSeekBackward: false,
+        showSeekForward: false,
+      },
+    );
+  }, [
+    canUseNativeLockScreen,
+    nativeStatus?.playing,
+    nowPlaying.coverArt,
+    nowPlaying.songArtist,
+    nowPlaying.songTitle,
+    nowPlaying.stationName,
+    player,
+    shouldKeepPlaying,
+  ]);
+
+  useEffect(() => {
+    if (!canUseNativeLockScreen || !shouldKeepPlaying || !nativeStatus?.playing) {
+      return;
+    }
+
+    player.updateLockScreenMetadata({
+      title: nowPlaying.songTitle,
+      artist: nowPlaying.songArtist,
+      albumTitle: nowPlaying.stationName,
+      artworkUrl: nowPlaying.coverArt || undefined,
+    });
+  }, [
+    canUseNativeLockScreen,
+    nativeStatus?.playing,
+    nowPlaying.coverArt,
+    nowPlaying.songArtist,
+    nowPlaying.songTitle,
+    nowPlaying.stationName,
+    player,
+    shouldKeepPlaying,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (canUseNativeLockScreen) {
+        player.clearLockScreenControls();
+      }
+    };
+  }, [canUseNativeLockScreen, player]);
 
   const artworkSource: ImageSourcePropType = nowPlaying.coverArt
     ? { uri: nowPlaying.coverArt }
@@ -570,6 +745,7 @@ export default function App() {
   const playButtonLabel = shouldKeepPlaying
       ? 'PAUSE'
       : 'PLAY';
+  const requestsTabDetail = `Elige el próximo golpe de la ${getDayMomentLabel()}`;
   const normalizedRequestSearch = requestSearch.trim().toLowerCase();
   const filteredRequestSongs = normalizedRequestSearch
     ? requestSongs.filter((item) =>
@@ -638,44 +814,11 @@ export default function App() {
   const handleOpenRequestTab = () => {
     setActiveConsoleTab('requests');
     setRequestFeedback(null);
+    void loadRequestSongs({ silent: requestSongs.length > 0 });
   };
 
   const handleRefreshRequests = async () => {
-    if (!nowPlaying.requestListUrl) {
-      return;
-    }
-
-    const requestListUrl = nowPlaying.requestListUrl;
-    setRequestLoading(true);
-    setRequestError(null);
-    setRequestFeedback(null);
-
-    try {
-      const response = await fetch(requestListUrl);
-
-      if (!response.ok) {
-        throw new Error(`Request list unavailable: ${response.status}`);
-      }
-
-      const payload = await response.json();
-      const nextSongs = Array.isArray(payload)
-        ? payload.map((entry: any) => ({
-            requestId: String(entry?.request_id ?? entry?.song?.id ?? Math.random()),
-            requestUrl: toAbsoluteUrl(entry?.request_url ?? ''),
-            title: entry?.song?.title || 'Canción disponible',
-            artist: entry?.song?.artist || 'Rockstars',
-            album: entry?.song?.album || '',
-            text: entry?.song?.text || 'Rock sin pausas',
-            coverArt: entry?.song?.art || entry?.song?.art_100 || null,
-          }))
-        : [];
-
-      setRequestSongs(nextSongs);
-    } catch {
-      setRequestError('No pudimos actualizar el catálogo de pedidos.');
-    } finally {
-      setRequestLoading(false);
-    }
+    await loadRequestSongs({ clearFeedback: true });
   };
 
   const handleSubmitRequest = async (item: RequestSong) => {
@@ -699,6 +842,7 @@ export default function App() {
       }
 
       setRequestFeedback(`Listo: ${item.title} quedó solicitada para sonar pronto.`);
+      void loadRequestSongs({ silent: true });
     } catch {
       setRequestError('No pudimos enviar el pedido. Intenta de nuevo en unos segundos.');
     } finally {
@@ -720,26 +864,47 @@ export default function App() {
       </ImageBackground>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, isPhoneLayout && styles.scrollContentPhone]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.pageShell}>
-          <View style={styles.heroPanel}>
+        <View style={[styles.pageShell, isPhoneLayout && styles.pageShellPhone]}>
+          <View style={[styles.heroPanel, isPhoneLayout && styles.heroPanelPhone]}>
             <Image
               source={DEFAULT_COVER}
               resizeMode="contain"
-              style={styles.logoCentered}
+              style={[
+                styles.logoCentered,
+                isPhoneLayout && styles.logoCenteredPhone,
+                isCompactLayout && styles.logoCenteredCompact,
+              ]}
               accessibilityLabel="Logo de Rockstars"
             />
-            <Text style={styles.heroSubtitleCentered}>¡La radio que inmortaliza el Rock!</Text>
+            <Text
+              style={[
+                styles.heroSubtitleCentered,
+                isPhoneLayout && styles.heroSubtitleCenteredPhone,
+              ]}
+            >
+              ¡La radio que inmortaliza el Rock!
+            </Text>
           </View>
 
           <View style={styles.playerDeck}>
-            <View style={[styles.playerStrip, !isWideLayout && styles.playerStripStacked]}>
-              <Image source={artworkSource} style={styles.playerArtwork} resizeMode="cover" />
+            <View
+              style={[
+                styles.playerStrip,
+                !isWideLayout && styles.playerStripStacked,
+                isPhoneLayout && styles.playerStripPhone,
+              ]}
+            >
+              <Image
+                source={artworkSource}
+                style={[styles.playerArtwork, isPhoneLayout && styles.playerArtworkPhone]}
+                resizeMode="cover"
+              />
 
-              <View style={styles.playerStripMain}>
-                <View style={styles.playerStripTop}>
+              <View style={[styles.playerStripMain, isPhoneLayout && styles.playerStripMainPhone]}>
+                <View style={[styles.playerStripTop, isPhoneLayout && styles.playerStripTopPhone]}>
                   <View style={styles.signalBadge}>
                     {showSpinner ? (
                       <Animated.View style={[styles.loadingSpinner, spinnerStyle]} />
@@ -748,20 +913,22 @@ export default function App() {
                     )}
                     <Text style={styles.signalBadgeText}>{SIGNAL_COPY}</Text>
                   </View>
-                  <Text style={styles.playerUpdatedText}>{playerStatusLabel}</Text>
+                  <Text style={[styles.playerUpdatedText, isPhoneLayout && styles.playerUpdatedTextPhone]}>
+                    {playerStatusLabel}
+                  </Text>
                 </View>
 
-                <Text style={styles.playerSongTitle} numberOfLines={1}>
+                <Text style={[styles.playerSongTitle, isPhoneLayout && styles.playerSongTitlePhone]} numberOfLines={2}>
                   {nowPlaying.songTitle}
                 </Text>
-                <Text style={styles.playerSongArtist} numberOfLines={1}>
+                <Text style={[styles.playerSongArtist, isPhoneLayout && styles.playerSongArtistPhone]} numberOfLines={1}>
                   {nowPlaying.songArtist}
                 </Text>
-                <Text style={styles.playerSongCopy} numberOfLines={2}>
+                <Text style={[styles.playerSongCopy, isPhoneLayout && styles.playerSongCopyPhone]} numberOfLines={2}>
                   {nowPlaying.songText}
                 </Text>
 
-                <View style={styles.progressMetaRow}>
+                <View style={[styles.progressMetaRow, isCompactLayout && styles.progressMetaRowCompact]}>
                   <Text style={styles.progressMetaLabel}>Tema actual</Text>
                   <Text style={styles.progressMetaTime}>
                     {formatSongClock(nowPlaying.elapsed)} / {formatSongClock(nowPlaying.duration)}
@@ -776,7 +943,7 @@ export default function App() {
                   />
                 </View>
 
-                <View style={styles.playerUtilityRow}>
+                <View style={[styles.playerUtilityRow, isPhoneLayout && styles.playerUtilityRowPhone]}>
                   <View style={styles.streamToggleRow}>
                     {(Object.keys(STREAMS) as StreamKey[]).map((streamKey) => {
                       const stream = STREAMS[streamKey];
@@ -788,11 +955,18 @@ export default function App() {
                           onPress={() => handleSelectStream(streamKey)}
                           style={({ pressed }) => [
                             styles.streamPillCompact,
+                            isPhoneLayout && styles.streamPillCompactPhone,
                             isSelected && styles.streamPillActive,
                             pressed && styles.streamPillPressed,
                           ]}
                         >
-                          <Text style={[styles.streamPillLabel, isSelected && styles.streamPillLabelActive]}>
+                          <Text
+                            style={[
+                              styles.streamPillLabel,
+                              isPhoneLayout && styles.streamPillLabelPhone,
+                              isSelected && styles.streamPillLabelActive,
+                            ]}
+                          >
                             {stream.label}
                           </Text>
                         </Pressable>
@@ -823,7 +997,13 @@ export default function App() {
                 </View>
               </View>
 
-              <View style={[styles.playerActionColumn, !isWideLayout && styles.playerActionColumnStacked]}>
+              <View
+                style={[
+                  styles.playerActionColumn,
+                  !isWideLayout && styles.playerActionColumnStacked,
+                  isPhoneLayout && styles.playerActionColumnPhone,
+                ]}
+              >
                 {IS_WEB
                   ? createElement(
                       'button',
@@ -843,15 +1023,23 @@ export default function App() {
                         onPress={handleTogglePlayback}
                         style={({ pressed }) => [
                           styles.playButton,
+                          isPhoneLayout && styles.playButtonPhone,
                           pressed && styles.playButtonPressed,
                         ]}
                       >
-                        <Text style={styles.playButtonIcon}>
+                        <Text style={[styles.playButtonIcon, isPhoneLayout && styles.playButtonIconPhone]}>
                           {shouldKeepPlaying && !autoplayBlocked ? 'II' : '▶'}
                         </Text>
                       </Pressable>
                     )}
-                <Text style={styles.inlinePlayButtonLabel}>{playButtonLabel}</Text>
+                <Text
+                  style={[
+                    styles.inlinePlayButtonLabel,
+                    isPhoneLayout && styles.inlinePlayButtonLabelPhone,
+                  ]}
+                >
+                  {playButtonLabel}
+                </Text>
               </View>
 
               {IS_WEB
@@ -884,21 +1072,34 @@ export default function App() {
                 : null}
             </View>
 
-            <View style={styles.consoleTabsCard}>
-              <View style={styles.tabRow}>
+            <View style={[styles.consoleTabsCard, isPhoneLayout && styles.consoleTabsCardPhone]}>
+              <View style={[styles.tabRow, isPhoneLayout && styles.tabRowPhone]}>
                 <Pressable
                   onPress={handleOpenRequestTab}
                   style={({ pressed }) => [
                     styles.tabButton,
+                    isPhoneLayout && styles.tabButtonPhone,
                     activeConsoleTab === 'requests' && styles.tabButtonActive,
                     pressed && styles.tabButtonPressed,
                   ]}
                 >
-                  <Text style={[styles.tabButtonLabel, activeConsoleTab === 'requests' && styles.tabButtonLabelActive]}>
+                  <Text
+                    style={[
+                      styles.tabButtonLabel,
+                      isPhoneLayout && styles.tabButtonLabelPhone,
+                      activeConsoleTab === 'requests' && styles.tabButtonLabelActive,
+                    ]}
+                  >
                     Pedidos
                   </Text>
-                  <Text style={[styles.tabButtonDetail, activeConsoleTab === 'requests' && styles.tabButtonDetailActive]}>
-                    Elige el próximo golpe de la noche
+                  <Text
+                    style={[
+                      styles.tabButtonDetail,
+                      isPhoneLayout && styles.tabButtonDetailPhone,
+                      activeConsoleTab === 'requests' && styles.tabButtonDetailActive,
+                    ]}
+                  >
+                    {requestsTabDetail}
                   </Text>
                 </Pressable>
 
@@ -906,23 +1107,36 @@ export default function App() {
                   onPress={() => setActiveConsoleTab('history')}
                   style={({ pressed }) => [
                     styles.tabButton,
+                    isPhoneLayout && styles.tabButtonPhone,
                     activeConsoleTab === 'history' && styles.tabButtonActive,
                     pressed && styles.tabButtonPressed,
                   ]}
                 >
-                  <Text style={[styles.tabButtonLabel, activeConsoleTab === 'history' && styles.tabButtonLabelActive]}>
+                  <Text
+                    style={[
+                      styles.tabButtonLabel,
+                      isPhoneLayout && styles.tabButtonLabelPhone,
+                      activeConsoleTab === 'history' && styles.tabButtonLabelActive,
+                    ]}
+                  >
                     Historial
                   </Text>
-                  <Text style={[styles.tabButtonDetail, activeConsoleTab === 'history' && styles.tabButtonDetailActive]}>
+                  <Text
+                    style={[
+                      styles.tabButtonDetail,
+                      isPhoneLayout && styles.tabButtonDetailPhone,
+                      activeConsoleTab === 'history' && styles.tabButtonDetailActive,
+                    ]}
+                  >
                     Últimos 15 temas que han sonado
                   </Text>
                 </Pressable>
               </View>
 
               {activeConsoleTab === 'requests' ? (
-                <View style={styles.inlinePanel}>
-                  <View style={styles.requestToolbar}>
-                    <View style={styles.requestSearchBox}>
+                <View style={[styles.inlinePanel, isPhoneLayout && styles.inlinePanelPhone]}>
+                  <View style={[styles.requestToolbar, isPhoneLayout && styles.requestToolbarStacked]}>
+                    <View style={[styles.requestSearchBox, isPhoneLayout && styles.requestSearchBoxPhone]}>
                       <TextInput
                         value={requestSearch}
                         onChangeText={setRequestSearch}
@@ -936,21 +1150,26 @@ export default function App() {
                       onPress={() => {
                         void handleRefreshRequests();
                       }}
-                      style={({ pressed }) => [styles.requestToolbarButton, pressed && styles.actionButtonPressed]}
+                      style={({ pressed }) => [
+                        styles.requestToolbarButton,
+                        isPhoneLayout && styles.requestToolbarButtonPhone,
+                        pressed && styles.actionButtonPressed,
+                      ]}
                     >
                       <Text style={styles.requestToolbarButtonText}>Recargar</Text>
                     </Pressable>
                   </View>
 
-                  <View style={styles.requestPagerRow}>
+                  <View style={[styles.requestPagerRow, isPhoneLayout && styles.requestPagerRowPhone]}>
                     <Text style={styles.requestPagerText}>
                       Página {safeRequestPage} de {totalRequestPages}
                     </Text>
-                    <View style={styles.requestPagerButtons}>
+                    <View style={[styles.requestPagerButtons, isCompactLayout && styles.requestPagerButtonsPhone]}>
                       <Pressable
                         onPress={() => setRequestPage((current) => Math.max(1, current - 1))}
                         style={({ pressed }) => [
                           styles.requestPagerButton,
+                          isCompactLayout && styles.requestPagerButtonPhone,
                           safeRequestPage === 1 && styles.requestPagerButtonDisabled,
                           pressed && safeRequestPage > 1 && styles.actionButtonPressed,
                         ]}
@@ -965,6 +1184,7 @@ export default function App() {
                         }
                         style={({ pressed }) => [
                           styles.requestPagerButton,
+                          isCompactLayout && styles.requestPagerButtonPhone,
                           safeRequestPage === totalRequestPages && styles.requestPagerButtonDisabled,
                           pressed && safeRequestPage < totalRequestPages && styles.actionButtonPressed,
                         ]}
@@ -990,20 +1210,23 @@ export default function App() {
                   {requestLoading ? (
                     <Text style={styles.requestLoadingText}>Cargando catálogo de pedidos...</Text>
                   ) : (
-                    <ScrollView style={styles.requestList} contentContainerStyle={styles.requestListContent}>
+                    <ScrollView
+                      style={[styles.requestList, isPhoneLayout && styles.requestListPhone]}
+                      contentContainerStyle={styles.requestListContent}
+                    >
                       {pagedRequestSongs.length > 0 ? (
                         pagedRequestSongs.map((item) => (
-                          <View key={item.requestId} style={styles.requestRow}>
+                          <View key={item.requestId} style={[styles.requestRow, isPhoneLayout && styles.requestRowPhone]}>
                             <Image
                               source={item.coverArt ? { uri: item.coverArt } : DEFAULT_COVER}
-                              style={styles.requestArtwork}
+                              style={[styles.requestArtwork, isPhoneLayout && styles.requestArtworkPhone]}
                             />
 
-                            <View style={styles.requestSongCopy}>
-                              <Text style={styles.requestSongTitle} numberOfLines={1}>
+                            <View style={[styles.requestSongCopy, isPhoneLayout && styles.requestSongCopyPhone]}>
+                              <Text style={[styles.requestSongTitle, isPhoneLayout && styles.requestSongTitlePhone]} numberOfLines={1}>
                                 {item.title}
                               </Text>
-                              <Text style={styles.requestSongArtist} numberOfLines={1}>
+                              <Text style={[styles.requestSongArtist, isPhoneLayout && styles.requestSongArtistPhone]} numberOfLines={1}>
                                 {item.artist}
                               </Text>
                               {item.album ? (
@@ -1019,6 +1242,7 @@ export default function App() {
                               }}
                               style={({ pressed }) => [
                                 styles.requestActionButton,
+                                isPhoneLayout && styles.requestActionButtonPhone,
                                 pressed && styles.actionButtonPressed,
                                 submittingRequestId === item.requestId && styles.requestActionButtonDisabled,
                               ]}
@@ -1042,32 +1266,39 @@ export default function App() {
                   )}
                 </View>
               ) : (
-                <View style={styles.inlinePanel}>
-                  <Text style={styles.historyHeading}>Últimas canciones al aire</Text>
-                  <Text style={styles.historySubheading}>
+                <View style={[styles.inlinePanel, isPhoneLayout && styles.inlinePanelPhone]}>
+                  <Text style={[styles.historyHeading, isPhoneLayout && styles.historyHeadingPhone]}>
+                    Últimas canciones al aire
+                  </Text>
+                  <Text style={[styles.historySubheading, isPhoneLayout && styles.historySubheadingPhone]}>
                     Recorre los temas que han pasado por la cabina.
                   </Text>
 
-                  <ScrollView style={styles.requestList} contentContainerStyle={styles.requestListContent}>
+                  <ScrollView
+                    style={[styles.requestList, isPhoneLayout && styles.requestListPhone]}
+                    contentContainerStyle={styles.requestListContent}
+                  >
                     {nowPlaying.history.length > 0 ? (
                       nowPlaying.history.map((item) => (
-                        <View key={item.id} style={styles.historyHeroItem}>
+                        <View key={item.id} style={[styles.historyHeroItem, isPhoneLayout && styles.historyHeroItemPhone]}>
                           <Image
                             source={item.coverArt ? { uri: item.coverArt } : DEFAULT_COVER}
-                            style={styles.historyHeroArtwork}
+                            style={[styles.historyHeroArtwork, isPhoneLayout && styles.historyHeroArtworkPhone]}
                           />
-                          <View style={styles.historyHeroCopy}>
-                            <Text style={styles.historyTitle} numberOfLines={1}>
+                          <View style={[styles.historyHeroCopy, isPhoneLayout && styles.historyHeroCopyPhone]}>
+                            <Text style={[styles.historyTitle, isPhoneLayout && styles.historyTitlePhone]} numberOfLines={1}>
                               {item.title}
                             </Text>
-                            <Text style={styles.historyArtist} numberOfLines={1}>
+                            <Text style={[styles.historyArtist, isPhoneLayout && styles.historyArtistPhone]} numberOfLines={1}>
                               {item.artist}
                             </Text>
                             <Text style={styles.historyHeroMeta} numberOfLines={1}>
                               {item.text}
                             </Text>
                           </View>
-                          <Text style={styles.historyTime}>{item.playedLabel}</Text>
+                          <Text style={[styles.historyTime, isPhoneLayout && styles.historyTimePhone]}>
+                            {item.playedLabel}
+                          </Text>
                         </View>
                       ))
                     ) : (
@@ -1083,18 +1314,21 @@ export default function App() {
               )}
             </View>
 
-            <View style={styles.footerPlateScene}>
+            <View style={[styles.footerPlateScene, isPhoneLayout && styles.footerPlateScenePhone]}>
               <View style={styles.footerPlate}>
                 <View style={styles.footerPlateInner}>
-                  <Text style={styles.footerManifesto} numberOfLines={1}>
+                  <Text
+                    style={[styles.footerManifesto, isPhoneLayout && styles.footerManifestoPhone]}
+                    numberOfLines={isPhoneLayout ? 2 : 1}
+                  >
                     <Text style={styles.footerManifestoHighlight}>Rockstars</Text> para quienes viven el rock como un <Text style={styles.footerManifestoHighlight}>estilo de vida</Text>, no como una moda pasajera.
                   </Text>
-                  <View style={styles.footerUnderline}>
-                    <View style={styles.footerUnderlineOuter} />
-                    <View style={styles.footerUnderlineMid} />
-                    <View style={styles.footerUnderlineCore} />
-                    <View style={styles.footerUnderlineMid} />
-                    <View style={styles.footerUnderlineOuter} />
+                  <View style={[styles.footerUnderline, isPhoneLayout && styles.footerUnderlinePhone]}>
+                    <View style={[styles.footerUnderlineOuter, isPhoneLayout && styles.footerUnderlineOuterPhone]} />
+                    <View style={[styles.footerUnderlineMid, isPhoneLayout && styles.footerUnderlineMidPhone]} />
+                    <View style={[styles.footerUnderlineCore, isPhoneLayout && styles.footerUnderlineCorePhone]} />
+                    <View style={[styles.footerUnderlineMid, isPhoneLayout && styles.footerUnderlineMidPhone]} />
+                    <View style={[styles.footerUnderlineOuter, isPhoneLayout && styles.footerUnderlineOuterPhone]} />
                   </View>
                 </View>
               </View>
@@ -1127,11 +1361,19 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 36,
   },
+  scrollContentPhone: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 24,
+  },
   pageShell: {
     width: '100%',
     maxWidth: 1120,
     alignSelf: 'center',
     gap: 24,
+  },
+  pageShellPhone: {
+    gap: 18,
   },
   heroPanel: {
     borderRadius: 34,
@@ -1145,6 +1387,11 @@ const styles = StyleSheet.create({
     shadowRadius: 0,
     shadowOffset: { width: 0, height: 0 },
     elevation: 0,
+  },
+  heroPanelPhone: {
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 2,
   },
   liveChip: {
     alignSelf: 'flex-start',
@@ -1192,6 +1439,15 @@ const styles = StyleSheet.create({
     height: 220,
     marginTop: 20,
   },
+  logoCenteredPhone: {
+    maxWidth: 260,
+    height: 168,
+    marginTop: 8,
+  },
+  logoCenteredCompact: {
+    maxWidth: 230,
+    height: 148,
+  },
   heroTitle: {
     marginTop: 12,
     color: '#FFFFFF',
@@ -1225,6 +1481,12 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 6 },
     textShadowRadius: 14,
   },
+  heroSubtitleCenteredPhone: {
+    marginTop: 0,
+    fontSize: 18,
+    lineHeight: 24,
+    paddingHorizontal: 18,
+  },
   heroManifesto: {
     marginTop: 14,
     color: '#E8E8E8',
@@ -1254,15 +1516,29 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'stretch',
   },
+  playerStripPhone: {
+    gap: 14,
+    padding: 14,
+    borderRadius: 24,
+  },
   playerArtwork: {
     width: 130,
     height: 130,
     borderRadius: 26,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
+  playerArtworkPhone: {
+    width: 92,
+    height: 92,
+    borderRadius: 20,
+    alignSelf: 'center',
+  },
   playerStripMain: {
     flex: 1,
     gap: 6,
+  },
+  playerStripMainPhone: {
+    gap: 4,
   },
   playerStripTop: {
     flexDirection: 'row',
@@ -1271,11 +1547,18 @@ const styles = StyleSheet.create({
     gap: 12,
     flexWrap: 'wrap',
   },
+  playerStripTopPhone: {
+    alignItems: 'flex-start',
+    gap: 8,
+  },
   playerUpdatedText: {
     color: '#B8B8B8',
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.4,
+  },
+  playerUpdatedTextPhone: {
+    fontSize: 10,
   },
   playerSongTitle: {
     marginTop: 4,
@@ -1283,19 +1566,35 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
   },
+  playerSongTitlePhone: {
+    marginTop: 2,
+    fontSize: 22,
+    lineHeight: 26,
+  },
   playerSongArtist: {
     color: '#F2F2F2',
     fontSize: 18,
     fontWeight: '700',
+  },
+  playerSongArtistPhone: {
+    fontSize: 15,
   },
   playerSongCopy: {
     color: '#BFBFBF',
     fontSize: 13,
     lineHeight: 18,
   },
+  playerSongCopyPhone: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
   playerUtilityRow: {
     marginTop: 10,
     gap: 12,
+  },
+  playerUtilityRowPhone: {
+    marginTop: 8,
+    gap: 10,
   },
   volumeInline: {
     gap: 8,
@@ -1308,6 +1607,11 @@ const styles = StyleSheet.create({
   },
   playerActionColumnStacked: {
     alignSelf: 'center',
+  },
+  playerActionColumnPhone: {
+    minWidth: 0,
+    alignSelf: 'center',
+    gap: 8,
   },
   coverArt: {
     ...StyleSheet.absoluteFillObject,
@@ -1371,6 +1675,11 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     elevation: 12,
   },
+  playButtonPhone: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+  },
   playButtonPressed: {
     opacity: 0.86,
     transform: [{ scale: 0.98 }],
@@ -1380,6 +1689,9 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: '900',
     marginLeft: 2,
+  },
+  playButtonIconPhone: {
+    fontSize: 23,
   },
   playButtonLabel: {
     position: 'absolute',
@@ -1452,6 +1764,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
+  inlinePlayButtonLabelPhone: {
+    fontSize: 12,
+  },
   statusCard: {
     padding: 22,
     borderRadius: 28,
@@ -1505,6 +1820,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
+  progressMetaRowCompact: {
+    marginTop: 14,
+    flexWrap: 'wrap',
+  },
   progressMetaLabel: {
     color: '#ECECEC',
     fontSize: 13,
@@ -1553,6 +1872,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
   },
+  streamPillCompactPhone: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   streamPillActive: {
     backgroundColor: 'rgba(216, 25, 33, 0.16)',
     borderColor: 'rgba(216, 25, 33, 0.54)',
@@ -1564,6 +1889,9 @@ const styles = StyleSheet.create({
     color: '#F2F2F2',
     fontSize: 14,
     fontWeight: '800',
+  },
+  streamPillLabelPhone: {
+    fontSize: 13,
   },
   streamPillLabelActive: {
     color: '#FFFFFF',
@@ -1599,10 +1927,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 10,
   },
+  consoleTabsCardPhone: {
+    padding: 16,
+    borderRadius: 24,
+  },
   tabRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  tabRowPhone: {
+    gap: 8,
   },
   tabButton: {
     flex: 1,
@@ -1613,6 +1948,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  tabButtonPhone: {
+    minWidth: 0,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
   },
   tabButtonActive: {
     backgroundColor: 'rgba(216, 25, 33, 0.16)',
@@ -1626,6 +1967,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
+  tabButtonLabelPhone: {
+    fontSize: 15,
+  },
   tabButtonLabelActive: {
     color: '#FFFFFF',
   },
@@ -1635,11 +1979,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
   },
+  tabButtonDetailPhone: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
   tabButtonDetailActive: {
     color: '#FFD0D3',
   },
   inlinePanel: {
     marginTop: 18,
+  },
+  inlinePanelPhone: {
+    marginTop: 14,
   },
   actionRow: {
     marginTop: 18,
@@ -1708,11 +2059,18 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
   },
+  historyHeadingPhone: {
+    fontSize: 20,
+  },
   historySubheading: {
     marginTop: 6,
     color: '#A9A9A9',
     fontSize: 13,
     lineHeight: 19,
+  },
+  historySubheadingPhone: {
+    fontSize: 12,
+    lineHeight: 17,
   },
   historyHeroItem: {
     flexDirection: 'row',
@@ -1725,15 +2083,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.06)',
   },
+  historyHeroItemPhone: {
+    alignItems: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
   historyHeroArtwork: {
     width: 54,
     height: 54,
     borderRadius: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
+  historyHeroArtworkPhone: {
+    width: 48,
+    height: 48,
+  },
   historyHeroCopy: {
     flex: 1,
     gap: 3,
+  },
+  historyHeroCopyPhone: {
+    minWidth: 0,
   },
   historyHeroMeta: {
     color: '#8B8B8B',
@@ -1799,6 +2169,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  requestToolbarStacked: {
+    marginTop: 16,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
   requestSearchBox: {
     flex: 1,
     borderRadius: 16,
@@ -1806,6 +2182,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.08)',
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
     paddingHorizontal: 14,
+  },
+  requestSearchBoxPhone: {
+    width: '100%',
   },
   requestSearchInput: {
     color: '#FFFFFF',
@@ -1820,6 +2199,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
   },
+  requestToolbarButtonPhone: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   requestToolbarButtonText: {
     color: '#FFFFFF',
     fontSize: 13,
@@ -1832,6 +2216,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
+  requestPagerRowPhone: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
   requestPagerText: {
     color: '#B6B6B6',
     fontSize: 13,
@@ -1841,11 +2230,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  requestPagerButtonsPhone: {
+    width: '100%',
+  },
   requestPagerButton: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  requestPagerButtonPhone: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   requestPagerButtonDisabled: {
     opacity: 0.4,
@@ -1889,6 +2286,9 @@ const styles = StyleSheet.create({
     marginTop: 18,
     maxHeight: 520,
   },
+  requestListPhone: {
+    maxHeight: 470,
+  },
   requestListContent: {
     gap: 10,
     paddingBottom: 8,
@@ -1904,25 +2304,45 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.06)',
   },
+  requestRowPhone: {
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
   requestArtwork: {
     width: 54,
     height: 54,
     borderRadius: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
+  requestArtworkPhone: {
+    width: 48,
+    height: 48,
+  },
   requestSongCopy: {
     flex: 1,
     gap: 2,
+  },
+  requestSongCopyPhone: {
+    minWidth: 0,
   },
   requestSongTitle: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '800',
   },
+  requestSongTitlePhone: {
+    fontSize: 14,
+  },
   requestSongArtist: {
     color: '#D1D1D1',
     fontSize: 13,
     fontWeight: '700',
+  },
+  requestSongArtistPhone: {
+    fontSize: 12,
   },
   requestSongAlbum: {
     color: '#888888',
@@ -1934,6 +2354,11 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     borderRadius: 12,
     backgroundColor: '#D81921',
+  },
+  requestActionButtonPhone: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   requestActionButtonDisabled: {
     opacity: 0.72,
@@ -1964,6 +2389,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 4,
   },
+  footerPlateScenePhone: {
+    paddingTop: 2,
+    paddingBottom: 8,
+  },
   footerPlate: {
     width: '100%',
     maxWidth: 1040,
@@ -1980,6 +2409,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: 0.1,
   },
+  footerManifestoPhone: {
+    fontSize: 13,
+    lineHeight: 19,
+    paddingHorizontal: 10,
+  },
   footerManifestoHighlight: {
     fontWeight: '900',
     color: '#FFFFFF',
@@ -1991,11 +2425,18 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 10,
   },
+  footerUnderlinePhone: {
+    gap: 4,
+    marginTop: 8,
+  },
   footerUnderlineOuter: {
     width: 90,
     height: 2,
     borderRadius: 999,
     backgroundColor: 'rgba(255, 45, 56, 0.18)',
+  },
+  footerUnderlineOuterPhone: {
+    width: 34,
   },
   footerUnderlineMid: {
     width: 58,
@@ -2003,10 +2444,28 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(255, 45, 56, 0.42)',
   },
+  footerUnderlineMidPhone: {
+    width: 24,
+  },
   footerUnderlineCore: {
     width: 140,
     height: 3,
     borderRadius: 999,
     backgroundColor: '#FF2D38',
+  },
+  footerUnderlineCorePhone: {
+    width: 68,
+  },
+  historyTitlePhone: {
+    fontSize: 13,
+  },
+  historyArtistPhone: {
+    fontSize: 11,
+  },
+  historyTimePhone: {
+    width: '100%',
+    marginLeft: 62,
+    marginTop: 4,
+    fontSize: 10,
   },
 });
