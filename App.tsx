@@ -35,6 +35,7 @@ const STREAMS = {
   },
 } as const;
 
+const IOS_MOBILE_STREAM_URL = 'https://radio.rockstars.com.co/hls/rockstars/live.m3u8';
 const NOW_PLAYING_ENDPOINT = 'https://radio.rockstars.com.co/api/nowplaying/rockstars';
 const API_ORIGIN = 'https://radio.rockstars.com.co';
 const REQUESTS_PER_PAGE = 6;
@@ -207,6 +208,14 @@ function shuffleItems<T>(items: T[]) {
   return nextItems;
 }
 
+function getStreamUrlForCurrentPlatform(streamKey: StreamKey) {
+  if (Platform.OS === 'ios' && streamKey === 'mobile') {
+    return IOS_MOBILE_STREAM_URL;
+  }
+
+  return STREAMS[streamKey].url;
+}
+
 function isActiveWebSpinner(
   playbackState: WebPlaybackState,
   shouldKeepPlaying: boolean,
@@ -273,6 +282,7 @@ export default function App() {
   const nativeStreamSwitchingRef = useRef(false);
   const spinnerRotation = useRef(new Animated.Value(0)).current;
   const activeStream = STREAMS[selectedStream];
+  const activeNativeStreamUrl = getStreamUrlForCurrentPlatform(selectedStream);
   const player = useAudioPlayer(STREAMS.high.url, {
     keepAudioSessionActive: true,
   });
@@ -349,7 +359,7 @@ export default function App() {
     setAudioModeAsync({
       playsInSilentMode: true,
       shouldPlayInBackground: true,
-      interruptionMode: 'doNotMix',
+      interruptionMode: 'mixWithOthers',
     }).catch(() => {
       // Si un dispositivo no soporta algún modo, la app sigue funcionando.
     });
@@ -601,15 +611,19 @@ export default function App() {
   }, [player, shouldKeepPlaying]);
 
   useEffect(() => {
-    if (IS_WEB || nativeStreamUrlRef.current === activeStream.url) {
+    if (IS_WEB || nativeStreamUrlRef.current === activeNativeStreamUrl) {
       return;
     }
 
     nativeStreamSwitchingRef.current = true;
-    nativeStreamUrlRef.current = activeStream.url;
+    nativeStreamUrlRef.current = activeNativeStreamUrl;
 
     try {
-      player.replace(activeStream.url);
+      if (canUseNativeLockScreen) {
+        player.setActiveForLockScreen(false);
+      }
+
+      player.replace(activeNativeStreamUrl);
     } catch {
       nativeStreamSwitchingRef.current = false;
       return;
@@ -626,7 +640,7 @@ export default function App() {
     return () => {
       clearTimeout(settleTimer);
     };
-  }, [activeStream.url, player, shouldKeepPlaying]);
+  }, [activeNativeStreamUrl, canUseNativeLockScreen, player, shouldKeepPlaying]);
 
   useEffect(() => {
     if (IS_WEB || !shouldKeepPlaying || nativeStatus?.playing || nativeStatus?.isBuffering) {
@@ -639,7 +653,7 @@ export default function App() {
 
     const recoveryTimer = setTimeout(() => {
       safeNativePlay();
-    }, appStateRef.current === 'active' ? 350 : 900);
+    }, appStateRef.current === 'active' ? 120 : 500);
 
     return () => {
       clearTimeout(recoveryTimer);
@@ -663,9 +677,10 @@ export default function App() {
       if (nextAppState === 'active' && resumeAfterInterruptionRef.current && shouldKeepPlaying) {
         resumeAfterInterruptionRef.current = false;
 
+        safeNativePlay();
         setTimeout(() => {
           safeNativePlay();
-        }, 150);
+        }, 80);
       }
     });
 
