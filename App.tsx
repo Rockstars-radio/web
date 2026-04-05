@@ -40,7 +40,7 @@ const REQUESTS_PER_PAGE = 6;
 const REQUESTS_REFRESH_INTERVAL_MS = 45000;
 const SIGNAL_COPY = 'SEÑAL DE ALTO VOLTAJE';
 const DEFAULT_COVER = require('./assets/rockstars-isotipo.png');
-const HERO_LOGO = require('./assets/rockstars-logo-full.png');
+const HERO_LOGO = require('./assets/rockstars-logo-white.png');
 const APP_BACKGROUND = require('./assets/rockstars-dark-guitar.png');
 const IS_WEB = Platform.OS === 'web';
 
