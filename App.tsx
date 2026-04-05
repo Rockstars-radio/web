@@ -7,6 +7,7 @@ import {
   Animated,
   Easing,
   Image,
+  ImageBackground,
   ImageSourcePropType,
   Linking,
   Platform,
@@ -42,6 +43,7 @@ const REQUESTS_REFRESH_INTERVAL_MS = 45000;
 const SIGNAL_COPY = 'SEÑAL DE ALTO VOLTAJE';
 const DEFAULT_COVER = require('./assets/rockstars-isotipo.png');
 const HERO_LOGO = require('./assets/rockstars-logo-full.png');
+const APP_BACKGROUND = require('./assets/rockstars-dark-guitar.png');
 const IS_WEB = Platform.OS === 'web';
 
 type StreamKey = keyof typeof STREAMS;
@@ -646,13 +648,17 @@ export default function App() {
       return;
     }
 
+    if (appStateRef.current !== 'active' || resumeAfterInterruptionRef.current) {
+      return;
+    }
+
     if (nativeStreamSwitchingRef.current) {
       return;
     }
 
     const recoveryTimer = setTimeout(() => {
       safeNativePlay();
-    }, appStateRef.current === 'active' ? 120 : 500);
+    }, 280);
 
     return () => {
       clearTimeout(recoveryTimer);
@@ -670,16 +676,15 @@ export default function App() {
 
       if (previousState === 'active' && nextAppState !== 'active' && shouldKeepPlaying) {
         resumeAfterInterruptionRef.current = true;
+        safeNativePause();
         return;
       }
 
       if (nextAppState === 'active' && resumeAfterInterruptionRef.current && shouldKeepPlaying) {
-        resumeAfterInterruptionRef.current = false;
-
-        safeNativePlay();
         setTimeout(() => {
+          resumeAfterInterruptionRef.current = false;
           safeNativePlay();
-        }, 80);
+        }, 260);
       }
     });
 
@@ -891,13 +896,16 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
 
-      <View style={styles.softBackdrop}>
-        <View style={styles.softBackdropGlowPrimary} />
-        <View style={styles.softBackdropGlowSecondary} />
-        <View style={styles.softBackdropGlowAccent} />
-      </View>
+      <ImageBackground
+        source={APP_BACKGROUND}
+        resizeMode="cover"
+        style={styles.wallBackdrop}
+        imageStyle={styles.wallBackdropImage}
+      >
+        <View style={styles.wallVignette} />
+      </ImageBackground>
 
       <ScrollView
         contentContainerStyle={[styles.scrollContent, isPhoneLayout && styles.scrollContentPhone]}
@@ -1379,38 +1387,18 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f1f1f1',
+    backgroundColor: '#070707',
   },
-  softBackdrop: {
+  wallBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#f5f3f2',
+    backgroundColor: '#120C0C',
   },
-  softBackdropGlowPrimary: {
-    position: 'absolute',
-    top: -140,
-    left: -120,
-    width: 420,
-    height: 420,
-    borderRadius: 210,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+  wallBackdropImage: {
+    opacity: 0.78,
   },
-  softBackdropGlowSecondary: {
-    position: 'absolute',
-    right: -80,
-    top: 120,
-    width: 340,
-    height: 340,
-    borderRadius: 170,
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
-  },
-  softBackdropGlowAccent: {
-    position: 'absolute',
-    left: '12%',
-    bottom: -120,
-    width: 360,
-    height: 360,
-    borderRadius: 180,
-    backgroundColor: 'rgba(216, 25, 33, 0.08)',
+  wallVignette: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6, 6, 8, 0.48)',
   },
   scrollContent: {
     paddingHorizontal: 18,
