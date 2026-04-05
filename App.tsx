@@ -420,7 +420,6 @@ export default function App() {
         const response = await fetch(withFreshQuery(nowPlaying.requestListUrl), {
           headers: {
             Accept: 'application/json',
-            'Cache-Control': 'no-cache',
           },
         });
 
