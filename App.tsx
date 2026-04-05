@@ -269,9 +269,11 @@ export default function App() {
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
   const appStateRef = useRef<AppStateStatus>(IS_WEB ? 'active' : AppState.currentState);
   const resumeAfterInterruptionRef = useRef(false);
+  const nativeStreamUrlRef = useRef<string>(STREAMS.high.url);
+  const nativeStreamSwitchingRef = useRef(false);
   const spinnerRotation = useRef(new Animated.Value(0)).current;
   const activeStream = STREAMS[selectedStream];
-  const player = useAudioPlayer(activeStream.url, {
+  const player = useAudioPlayer(STREAMS.high.url, {
     keepAudioSessionActive: true,
   });
   const nativeStatus = useAudioPlayerStatus(player);
@@ -596,25 +598,53 @@ export default function App() {
     }
 
     safeNativePlay();
-  }, [player, selectedStream, shouldKeepPlaying]);
+  }, [player, shouldKeepPlaying]);
+
+  useEffect(() => {
+    if (IS_WEB || nativeStreamUrlRef.current === activeStream.url) {
+      return;
+    }
+
+    nativeStreamSwitchingRef.current = true;
+    nativeStreamUrlRef.current = activeStream.url;
+
+    try {
+      player.replace(activeStream.url);
+    } catch {
+      nativeStreamSwitchingRef.current = false;
+      return;
+    }
+
+    const settleTimer = setTimeout(() => {
+      nativeStreamSwitchingRef.current = false;
+
+      if (shouldKeepPlaying) {
+        safeNativePlay();
+      }
+    }, 600);
+
+    return () => {
+      clearTimeout(settleTimer);
+    };
+  }, [activeStream.url, player, shouldKeepPlaying]);
 
   useEffect(() => {
     if (IS_WEB || !shouldKeepPlaying || nativeStatus?.playing || nativeStatus?.isBuffering) {
       return;
     }
 
-    if (resumeAfterInterruptionRef.current) {
+    if (nativeStreamSwitchingRef.current) {
       return;
     }
 
     const recoveryTimer = setTimeout(() => {
       safeNativePlay();
-    }, 1800);
+    }, appStateRef.current === 'active' ? 350 : 900);
 
     return () => {
       clearTimeout(recoveryTimer);
     };
-  }, [nativeStatus?.isBuffering, nativeStatus?.playing, player, selectedStream, shouldKeepPlaying]);
+  }, [nativeStatus?.isBuffering, nativeStatus?.playing, player, shouldKeepPlaying]);
 
   useEffect(() => {
     if (IS_WEB) {
@@ -635,7 +665,7 @@ export default function App() {
 
         setTimeout(() => {
           safeNativePlay();
-        }, 900);
+        }, 150);
       }
     });
 
@@ -801,10 +831,6 @@ export default function App() {
   const handleSelectStream = (nextStream: StreamKey) => {
     if (nextStream === selectedStream) {
       return;
-    }
-
-    if (!IS_WEB && shouldKeepPlaying) {
-      safeNativePause();
     }
 
     setSelectedStream(nextStream);
