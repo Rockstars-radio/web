@@ -7,7 +7,6 @@ import {
   Animated,
   Easing,
   Image,
-  ImageBackground,
   ImageSourcePropType,
   Linking,
   Platform,
@@ -41,8 +40,8 @@ const API_ORIGIN = 'https://radio.rockstars.com.co';
 const REQUESTS_PER_PAGE = 6;
 const REQUESTS_REFRESH_INTERVAL_MS = 45000;
 const SIGNAL_COPY = 'SEÑAL DE ALTO VOLTAJE';
-const DEFAULT_COVER = require('./assets/rockstars-logo-white.png');
-const STAGE_BACKGROUND = require('./assets/rock-wall-stage.png');
+const DEFAULT_COVER = require('./assets/rockstars-isotipo.png');
+const HERO_LOGO = require('./assets/rockstars-logo-full.png');
 const IS_WEB = Platform.OS === 'web';
 
 type StreamKey = keyof typeof STREAMS;
@@ -359,7 +358,7 @@ export default function App() {
     setAudioModeAsync({
       playsInSilentMode: true,
       shouldPlayInBackground: true,
-      interruptionMode: 'mixWithOthers',
+      interruptionMode: 'doNotMix',
     }).catch(() => {
       // Si un dispositivo no soporta algún modo, la app sigue funcionando.
     });
@@ -892,16 +891,13 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
 
-      <ImageBackground
-        source={STAGE_BACKGROUND}
-        resizeMode="cover"
-        style={styles.wallBackdrop}
-        imageStyle={styles.wallBackdropImage}
-      >
-        <View style={styles.wallVignette} />
-      </ImageBackground>
+      <View style={styles.softBackdrop}>
+        <View style={styles.softBackdropGlowPrimary} />
+        <View style={styles.softBackdropGlowSecondary} />
+        <View style={styles.softBackdropGlowAccent} />
+      </View>
 
       <ScrollView
         contentContainerStyle={[styles.scrollContent, isPhoneLayout && styles.scrollContentPhone]}
@@ -910,7 +906,7 @@ export default function App() {
         <View style={[styles.pageShell, isPhoneLayout && styles.pageShellPhone]}>
           <View style={[styles.heroPanel, isPhoneLayout && styles.heroPanelPhone]}>
             <Image
-              source={DEFAULT_COVER}
+              source={HERO_LOGO}
               resizeMode="contain"
               style={[
                 styles.logoCentered,
@@ -1326,7 +1322,7 @@ export default function App() {
                             style={[styles.historyHeroArtwork, isPhoneLayout && styles.historyHeroArtworkPhone]}
                           />
                           <View style={[styles.historyHeroCopy, isPhoneLayout && styles.historyHeroCopyPhone]}>
-                            <Text style={[styles.historyTitle, isPhoneLayout && styles.historyTitlePhone]} numberOfLines={1}>
+                            <Text style={[styles.historyTitle, isPhoneLayout && styles.historyTitlePhone]} numberOfLines={2}>
                               {item.title}
                             </Text>
                             <Text style={[styles.historyArtist, isPhoneLayout && styles.historyArtistPhone]} numberOfLines={1}>
@@ -1383,18 +1379,38 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#050505',
+    backgroundColor: '#f1f1f1',
   },
-  wallBackdrop: {
+  softBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#120C0C',
+    backgroundColor: '#f5f3f2',
   },
-  wallBackdropImage: {
-    opacity: 0.5,
+  softBackdropGlowPrimary: {
+    position: 'absolute',
+    top: -140,
+    left: -120,
+    width: 420,
+    height: 420,
+    borderRadius: 210,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
   },
-  wallVignette: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.54)',
+  softBackdropGlowSecondary: {
+    position: 'absolute',
+    right: -80,
+    top: 120,
+    width: 340,
+    height: 340,
+    borderRadius: 170,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+  },
+  softBackdropGlowAccent: {
+    position: 'absolute',
+    left: '12%',
+    bottom: -120,
+    width: 360,
+    height: 360,
+    borderRadius: 180,
+    backgroundColor: 'rgba(216, 25, 33, 0.08)',
   },
   scrollContent: {
     paddingHorizontal: 18,
@@ -1475,18 +1491,18 @@ const styles = StyleSheet.create({
   },
   logoCentered: {
     width: '100%',
-    maxWidth: 340,
-    height: 220,
+    maxWidth: 360,
+    height: 236,
     marginTop: 20,
   },
   logoCenteredPhone: {
-    maxWidth: 260,
-    height: 168,
+    maxWidth: 280,
+    height: 182,
     marginTop: 8,
   },
   logoCenteredCompact: {
-    maxWidth: 230,
-    height: 148,
+    maxWidth: 250,
+    height: 162,
   },
   heroTitle: {
     marginTop: 12,
@@ -1543,7 +1559,7 @@ const styles = StyleSheet.create({
     gap: 18,
     padding: 18,
     borderRadius: 30,
-    backgroundColor: 'rgba(9, 9, 12, 0.94)',
+    backgroundColor: 'rgba(12, 12, 15, 0.94)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     shadowColor: '#D81921',
@@ -2119,12 +2135,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: 'rgba(15, 15, 18, 0.92)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   historyHeroItemPhone: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 11,
   },
@@ -2141,6 +2157,7 @@ const styles = StyleSheet.create({
   historyHeroCopy: {
     flex: 1,
     gap: 3,
+    minWidth: 0,
   },
   historyHeroCopyPhone: {
     minWidth: 0,
@@ -2503,9 +2520,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   historyTimePhone: {
-    width: '100%',
-    marginLeft: 62,
-    marginTop: 4,
+    width: 'auto',
+    marginLeft: 0,
+    marginTop: 0,
     fontSize: 10,
   },
 });
