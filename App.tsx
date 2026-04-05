@@ -3,7 +3,6 @@ import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
 import { createElement, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
-  AppState,
   Animated,
   Easing,
   Image,
@@ -19,7 +18,6 @@ import {
   TextInput,
   useWindowDimensions,
   View,
-  type AppStateStatus,
 } from 'react-native';
 
 const STREAMS = {
@@ -277,8 +275,6 @@ export default function App() {
   const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(null);
 
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
-  const appStateRef = useRef<AppStateStatus>(IS_WEB ? 'active' : AppState.currentState);
-  const resumeAfterInterruptionRef = useRef(false);
   const nativeStreamUrlRef = useRef<string>(STREAMS.high.url);
   const nativeStreamSwitchingRef = useRef(false);
   const spinnerRotation = useRef(new Animated.Value(0)).current;
@@ -644,11 +640,13 @@ export default function App() {
   }, [activeNativeStreamUrl, canUseNativeLockScreen, player, shouldKeepPlaying]);
 
   useEffect(() => {
-    if (IS_WEB || !shouldKeepPlaying || nativeStatus?.playing || nativeStatus?.isBuffering) {
-      return;
-    }
-
-    if (appStateRef.current !== 'active' || resumeAfterInterruptionRef.current) {
+    if (
+      IS_WEB ||
+      Platform.OS === 'ios' ||
+      !shouldKeepPlaying ||
+      nativeStatus?.playing ||
+      nativeStatus?.isBuffering
+    ) {
       return;
     }
 
@@ -664,34 +662,6 @@ export default function App() {
       clearTimeout(recoveryTimer);
     };
   }, [nativeStatus?.isBuffering, nativeStatus?.playing, player, shouldKeepPlaying]);
-
-  useEffect(() => {
-    if (IS_WEB) {
-      return;
-    }
-
-    const subscription = AppState.addEventListener('change', (nextAppState) => {
-      const previousState = appStateRef.current;
-      appStateRef.current = nextAppState;
-
-      if (previousState === 'active' && nextAppState !== 'active' && shouldKeepPlaying) {
-        resumeAfterInterruptionRef.current = true;
-        safeNativePause();
-        return;
-      }
-
-      if (nextAppState === 'active' && resumeAfterInterruptionRef.current && shouldKeepPlaying) {
-        setTimeout(() => {
-          resumeAfterInterruptionRef.current = false;
-          safeNativePlay();
-        }, 260);
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [shouldKeepPlaying]);
 
   useEffect(() => {
     if (!canUseNativeLockScreen) {
