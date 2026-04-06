@@ -6,11 +6,11 @@ const distRoot = path.join(projectRoot, 'dist');
 const privacyDistRoot = path.join(distRoot, 'politica-de-privacidad');
 const privacyAssetsRoot = path.join(privacyDistRoot, 'assets');
 
-const shareImageSource = path.join(projectRoot, 'assets', 'rockstars-dark-guitar.png');
+const shareImageSource = path.join(projectRoot, 'assets', 'social-preview.jpg');
 const whiteLogoSource = path.join(projectRoot, 'assets', 'rockstars-logo-white.png');
 const faviconSource = path.join(projectRoot, 'assets', 'rockstars-isotipo.png');
 const privacySource = path.join(projectRoot, 'privacy-policy.html');
-const socialPreviewTarget = path.join(distRoot, 'social-preview.png');
+const socialPreviewTarget = path.join(distRoot, 'social-preview.jpg');
 const privacyTarget = path.join(privacyDistRoot, 'index.html');
 const privacyBackgroundTarget = path.join(privacyAssetsRoot, 'rockstars-dark-guitar.png');
 const privacyLogoTarget = path.join(privacyAssetsRoot, 'rockstars-logo-white.png');
@@ -19,7 +19,7 @@ const indexHtmlPath = path.join(distRoot, 'index.html');
 
 const siteUrl = 'https://rockstars.com.co/';
 const privacyUrl = 'https://rockstars.com.co/politica-de-privacidad/';
-const socialPreviewUrl = 'https://rockstars.com.co/social-preview.png';
+const socialPreviewUrl = 'https://rockstars.com.co/social-preview.jpg';
 const siteTitle = 'Rockstars Radio';
 const siteDescription =
   'La radio que inmortaliza el rock. Escucha la señal en vivo, revisa el historial y pide tus canciones favoritas.';
@@ -45,7 +45,7 @@ function injectMetaTags(html) {
     `<meta property="og:url" content="${siteUrl}" />`,
     `<meta property="og:image" content="${socialPreviewUrl}" />`,
     `<meta property="og:image:secure_url" content="${socialPreviewUrl}" />`,
-    `<meta property="og:image:type" content="image/png" />`,
+    `<meta property="og:image:type" content="image/jpeg" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="800" />`,
     `<meta property="og:image:alt" content="Rockstars Radio - portada para compartir" />`,
@@ -76,7 +76,7 @@ function injectPrivacyMetaTags(html) {
     `<meta property="og:url" content="${privacyUrl}" />`,
     `<meta property="og:image" content="${socialPreviewUrl}" />`,
     `<meta property="og:image:secure_url" content="${socialPreviewUrl}" />`,
-    `<meta property="og:image:type" content="image/png" />`,
+    `<meta property="og:image:type" content="image/jpeg" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="800" />`,
     `<meta property="og:image:alt" content="Rockstars Radio - portada para compartir" />`,
