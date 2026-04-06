@@ -1513,9 +1513,6 @@ export default function App() {
                   </View>
                 </View>
                 <View style={[styles.footerMetaRow, isPhoneLayout && styles.footerMetaRowPhone]}>
-                  <Text style={[styles.footerMetaCopy, isPhoneLayout && styles.footerMetaCopyPhone]}>
-                    LAVOZSALSA LLC
-                  </Text>
                   {IS_WEB
                     ? createElement(
                         'a',
@@ -2676,15 +2673,6 @@ const styles = StyleSheet.create({
   },
   footerUnderlineCorePhone: {
     width: 68,
-  },
-  footerMetaCopy: {
-    color: '#B2B2B2',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  footerMetaCopyPhone: {
-    fontSize: 11,
   },
   footerMetaLink: {
     paddingBottom: 4,
