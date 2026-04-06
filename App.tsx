@@ -1025,7 +1025,7 @@ export default function App() {
 
       <ImageBackground
         source={APP_BACKGROUND}
-        resizeMode="cover"
+        resizeMode={IS_WEB ? 'stretch' : 'cover'}
         style={styles.wallBackdrop}
         imageStyle={styles.wallBackdropImage}
       >
@@ -1520,6 +1520,8 @@ const styles = StyleSheet.create({
   },
   wallBackdropImage: {
     opacity: 0.78,
+    width: '100%',
+    height: '100%',
   },
   wallVignette: {
     ...StyleSheet.absoluteFillObject,
