@@ -3,6 +3,8 @@ import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
 import { createElement, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
+  AppState,
+  AppStateStatus,
   Animated,
   Easing,
   Image,
@@ -277,6 +279,10 @@ export default function App() {
   const webAudioRef = useRef<HTMLAudioElement | null>(null);
   const nativeStreamUrlRef = useRef<string>(STREAMS.high.url);
   const nativeStreamSwitchingRef = useRef(false);
+  const appStateRef = useRef<AppStateStatus>(IS_WEB ? 'active' : AppState.currentState);
+  const iosPendingResumeRef = useRef(false);
+  const iosResumeAttemptsRef = useRef(0);
+  const iosResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const spinnerRotation = useRef(new Animated.Value(0)).current;
   const activeStream = STREAMS[selectedStream];
   const activeNativeStreamUrl = getStreamUrlForCurrentPlatform(selectedStream);
@@ -308,6 +314,63 @@ export default function App() {
       // Si el player ya está detenido, no necesitamos interrumpir la experiencia.
     }
   };
+
+  const clearIosResumeTimer = useCallback(() => {
+    if (iosResumeTimerRef.current) {
+      clearTimeout(iosResumeTimerRef.current);
+      iosResumeTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleIosResume = useCallback(
+    (delayMs = 900) => {
+      if (IS_WEB || Platform.OS !== 'ios') {
+        return;
+      }
+
+      clearIosResumeTimer();
+
+      iosResumeTimerRef.current = setTimeout(() => {
+        iosResumeTimerRef.current = null;
+
+        if (!shouldKeepPlaying || nativeStreamSwitchingRef.current) {
+          return;
+        }
+
+        const currentStatus = player.currentStatus;
+        const isStillStopped =
+          !currentStatus?.playing &&
+          !currentStatus?.isBuffering &&
+          currentStatus?.timeControlStatus !== 'playing';
+
+        if (!isStillStopped) {
+          if (currentStatus?.playing) {
+            iosPendingResumeRef.current = false;
+            iosResumeAttemptsRef.current = 0;
+          }
+          return;
+        }
+
+        iosResumeAttemptsRef.current += 1;
+
+        try {
+          player.replace(activeNativeStreamUrl);
+        } catch {
+          safeNativePlay();
+          return;
+        }
+
+        setTimeout(() => {
+          if (!shouldKeepPlaying || nativeStreamSwitchingRef.current) {
+            return;
+          }
+
+          safeNativePlay();
+        }, 240);
+      }, delayMs);
+    },
+    [activeNativeStreamUrl, clearIosResumeTimer, player, shouldKeepPlaying],
+  );
 
   const attemptWebPlayback = async () => {
     const audio = webAudioRef.current;
@@ -361,6 +424,12 @@ export default function App() {
       // Si un dispositivo no soporta algún modo, la app sigue funcionando.
     });
   }, []);
+
+  useEffect(() => {
+    return () => {
+      clearIosResumeTimer();
+    };
+  }, [clearIosResumeTimer]);
 
   useEffect(() => {
     let mounted = true;
@@ -608,6 +677,36 @@ export default function App() {
   }, [player, shouldKeepPlaying]);
 
   useEffect(() => {
+    if (IS_WEB || Platform.OS !== 'ios') {
+      return;
+    }
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextState;
+
+      if (!shouldKeepPlaying) {
+        return;
+      }
+
+      if (previousState === 'active' && nextState !== 'active') {
+        iosPendingResumeRef.current = true;
+        iosResumeAttemptsRef.current = 0;
+        clearIosResumeTimer();
+        return;
+      }
+
+      if (nextState === 'active' && iosPendingResumeRef.current) {
+        scheduleIosResume(800);
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [clearIosResumeTimer, scheduleIosResume, shouldKeepPlaying]);
+
+  useEffect(() => {
     if (IS_WEB || nativeStreamUrlRef.current === activeNativeStreamUrl) {
       return;
     }
@@ -662,6 +761,62 @@ export default function App() {
       clearTimeout(recoveryTimer);
     };
   }, [nativeStatus?.isBuffering, nativeStatus?.playing, player, shouldKeepPlaying]);
+
+  useEffect(() => {
+    if (IS_WEB || Platform.OS !== 'ios') {
+      return;
+    }
+
+    if (!shouldKeepPlaying) {
+      iosPendingResumeRef.current = false;
+      iosResumeAttemptsRef.current = 0;
+      clearIosResumeTimer();
+      return;
+    }
+
+    if (nativeStatus?.playing) {
+      iosPendingResumeRef.current = false;
+      iosResumeAttemptsRef.current = 0;
+      clearIosResumeTimer();
+      return;
+    }
+
+    if (
+      !iosPendingResumeRef.current ||
+      nativeStatus?.isBuffering ||
+      appStateRef.current !== 'active' ||
+      nativeStreamSwitchingRef.current ||
+      iosResumeAttemptsRef.current >= 2
+    ) {
+      return;
+    }
+
+    const shouldNudgeResume =
+      nativeStatus?.timeControlStatus === 'paused' ||
+      nativeStatus?.playbackState === 'paused' ||
+      nativeStatus?.reasonForWaitingToPlay === '';
+
+    if (!shouldNudgeResume) {
+      return;
+    }
+
+    const stalledResumeTimer = setTimeout(() => {
+      scheduleIosResume(0);
+    }, 1400);
+
+    return () => {
+      clearTimeout(stalledResumeTimer);
+    };
+  }, [
+    clearIosResumeTimer,
+    nativeStatus?.isBuffering,
+    nativeStatus?.playbackState,
+    nativeStatus?.playing,
+    nativeStatus?.reasonForWaitingToPlay,
+    nativeStatus?.timeControlStatus,
+    scheduleIosResume,
+    shouldKeepPlaying,
+  ]);
 
   useEffect(() => {
     if (!canUseNativeLockScreen) {
