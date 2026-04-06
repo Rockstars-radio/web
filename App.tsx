@@ -45,6 +45,8 @@ const DEFAULT_COVER = require('./assets/rockstars-isotipo.png');
 const HERO_LOGO = require('./assets/rockstars-logo-white.png');
 const APP_BACKGROUND = require('./assets/rockstars-dark-guitar.png');
 const IS_WEB = Platform.OS === 'web';
+const PRIVACY_POLICY_PATH = '/politica-de-privacidad/';
+const PRIVACY_POLICY_URL = `${API_ORIGIN}${PRIVACY_POLICY_PATH}`;
 
 type StreamKey = keyof typeof STREAMS;
 type WebPlaybackState = 'idle' | 'buffering' | 'primed' | 'playing' | 'blocked' | 'error';
@@ -255,6 +257,16 @@ const webPlayButtonIconStyle: CSSProperties = {
 
 const webAudioElementStyle: CSSProperties = {
   display: 'none',
+};
+
+const webFooterLinkStyle: CSSProperties = {
+  color: '#F5F5F5',
+  fontSize: 13,
+  fontWeight: 800,
+  letterSpacing: 0.3,
+  textDecoration: 'none',
+  borderBottom: '1px solid rgba(255, 255, 255, 0.34)',
+  paddingBottom: 4,
 };
 
 export default function App() {
@@ -1483,9 +1495,9 @@ export default function App() {
               )}
             </View>
 
-            <View style={[styles.footerPlateScene, isPhoneLayout && styles.footerPlateScenePhone]}>
-              <View style={styles.footerPlate}>
-                <View style={styles.footerPlateInner}>
+              <View style={[styles.footerPlateScene, isPhoneLayout && styles.footerPlateScenePhone]}>
+                <View style={styles.footerPlate}>
+                  <View style={styles.footerPlateInner}>
                   <Text
                     style={[styles.footerManifesto, isPhoneLayout && styles.footerManifestoPhone]}
                     numberOfLines={isPhoneLayout ? 2 : 1}
@@ -1499,6 +1511,31 @@ export default function App() {
                     <View style={[styles.footerUnderlineMid, isPhoneLayout && styles.footerUnderlineMidPhone]} />
                     <View style={[styles.footerUnderlineOuter, isPhoneLayout && styles.footerUnderlineOuterPhone]} />
                   </View>
+                </View>
+                <View style={[styles.footerMetaRow, isPhoneLayout && styles.footerMetaRowPhone]}>
+                  <Text style={[styles.footerMetaCopy, isPhoneLayout && styles.footerMetaCopyPhone]}>
+                    LAVOZSALSA LLC
+                  </Text>
+                  {IS_WEB
+                    ? createElement(
+                        'a',
+                        {
+                          href: PRIVACY_POLICY_PATH,
+                          style: webFooterLinkStyle,
+                        },
+                        'Política de privacidad',
+                      )
+                    : (
+                        <Pressable
+                          onPress={() => handleOpenUrl(PRIVACY_POLICY_URL)}
+                          style={({ pressed }) => [
+                            styles.footerMetaLink,
+                            pressed && styles.actionButtonPressed,
+                          ]}
+                        >
+                          <Text style={styles.footerMetaLinkText}>Política de privacidad</Text>
+                        </Pressable>
+                      )}
                 </View>
               </View>
             </View>
@@ -2565,6 +2602,18 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     paddingBottom: 8,
   },
+  footerMetaRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    flexWrap: 'wrap',
+  },
+  footerMetaRowPhone: {
+    marginTop: 10,
+    gap: 10,
+  },
   footerPlate: {
     width: '100%',
     maxWidth: 1040,
@@ -2627,6 +2676,26 @@ const styles = StyleSheet.create({
   },
   footerUnderlineCorePhone: {
     width: 68,
+  },
+  footerMetaCopy: {
+    color: '#B2B2B2',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  footerMetaCopyPhone: {
+    fontSize: 11,
+  },
+  footerMetaLink: {
+    paddingBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.34)',
+  },
+  footerMetaLinkText: {
+    color: '#F5F5F5',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   historyTitlePhone: {
     fontSize: 13,
